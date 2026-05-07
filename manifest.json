@@ -1,10 +1,10 @@
 {
-  "description":"A short description of your trait here",
-  "name": "<YOUR_TRAIT_NAME>",
+  "description":"Sample trait written in rust for greet",
+  "name": "greetr",
   "functions": {
-    "<FUNCTION_NAME>": {
-      "return": "<RETURN_TYPE>",
-      "args": ["<ARGUMENT_TYPE1>", "<ARGUMENT_TYPE2>"]
+    "greet": {
+      "return": "void",
+      "args": ["char *"]
     }
   }
 }
