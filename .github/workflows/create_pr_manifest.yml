@@ -1,0 +1,177 @@
+name: Create PR manifest
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag'
+        required: true
+        type: string
+
+jobs:
+  generate-manifest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout trait repo
+        uses: actions/checkout@v4
+        with:
+          path: trait-repo
+
+      - name: Set up Ruby for license detection
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+
+      - name: Detect License
+        run: |
+          gem install licensee
+          # licensee outputs licenses as an array; grab the first key (e.g. "mit")
+          LICENSE=$(licensee detect --json --git-only 2>/dev/null | jq -r '.licenses[0].key // "MIT"')
+          echo "detected_license=$LICENSE" >> $GITHUB_ENV
+        working-directory: trait-repo
+
+      - name: Validate manifest.json exists
+        run: |
+          if [ ! -f "trait-repo/manifest.json" ]; then
+            echo "Error: manifest.json not found"
+            exit 1
+          fi
+
+      - name: Read manifest.json
+        id: manifest
+        run: |
+          RAW_NAME=$(jq -r '.name' manifest.json)
+          
+          NAME=${RAW_NAME//-/_}
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          
+          VERSION="${{ github.event.inputs.tag_name }}"
+          VERSION=${VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          echo "submitter=$REPO_OWNER" >> $GITHUB_OUTPUT
+          
+          echo "repository=https://github.com/${{ github.repository }}" >> $GITHUB_OUTPUT
+          
+          DESCRIPTION=$(jq -r '.description // ""' manifest.json)
+          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+        working-directory: trait-repo
+
+      - name: Read tags from tags.txt
+        id: tags
+        run: |
+          if [ -f "tags.txt" ]; then
+            TAGS=$(jq -R -s -c 'split("\n") | map(select(. != ""))' tags.txt)
+          else
+            TAGS="[]"
+          fi
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+        working-directory: trait-repo
+
+      - name: Generate pr manifest
+        run: |
+          TAG="${{ github.event.inputs.tag_name }}"
+          NAME="${{ steps.manifest.outputs.name }}"
+
+          cat > platforms.json << EOF
+          {
+            "linux-x86_64":   { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-linux-x86_64.so",    "checksum": "" },
+            "linux-aarch64":  { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-linux-arm64.so",     "checksum": "" },
+            "macos-arm64":    { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-macos-arm64.dylib",  "checksum": "" },
+            "macos-x86_64":   { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-macos-intel.dylib",  "checksum": "" },
+            "windows":        { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-windows-x86_64.dll", "checksum": "" },
+            "windows-arm64":  { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-windows-arm64.dll",  "checksum": "" },
+            "termux-aarch64": { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-termux-arm64.so",    "checksum": "" },
+            "termux-armv7":   { "url": "https://github.com/${{ github.repository }}/releases/download/$TAG/$NAME-termux-armv7.so",    "checksum": "" }
+          }
+          EOF
+
+          
+          jq --slurpfile platforms platforms.json \
+              --arg version "${{ steps.manifest.outputs.version }}" \
+              --arg description "${{ steps.manifest.outputs.description }}" \
+              --arg submitter "${{ steps.manifest.outputs.submitter }}" \
+              --arg repository "${{ steps.manifest.outputs.repository }}" \
+              --arg license "${detected_license:-MIT}" \
+              --argjson tags '${{ steps.tags.outputs.tags }}' \
+              '. + {
+                version: $version,
+                description: $description,
+                submitter: $submitter,
+                repository: $repository,
+                license: $license,
+                platforms: $platforms[0],
+                tags: $tags,
+                verified: false
+              }' manifest.json > pr_manifest.json
+        working-directory: trait-repo
+
+      - name: Fetch release assets and compute SHA256 checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag_name }}
+        run: |
+          NAME="${{ steps.manifest.outputs.name }}"
+          mkdir -p release-assets
+
+          
+          declare -A PLATFORM_FILES=(
+            ["linux-x86_64"]="$NAME-linux-x86_64.so"
+            ["linux-aarch64"]="$NAME-linux-arm64.so"
+            ["macos-arm64"]="$NAME-macos-arm64.dylib"
+            ["macos-x86_64"]="$NAME-macos-intel.dylib"
+            ["windows"]="$NAME-windows-x86_64.dll"
+            ["windows-arm64"]="$NAME-windows-arm64.dll"
+            ["termux-aarch64"]="$NAME-termux-arm64.so"
+            ["termux-armv7"]="$NAME-termux-armv7.so"
+          )
+
+          echo "{}" > found_hashes.json
+          for PLATFORM in "${!PLATFORM_FILES[@]}"; do
+            FILE="${PLATFORM_FILES[$PLATFORM]}"
+            if gh release download "$TAG" \
+                 --repo "${{ github.repository }}" \
+                 --pattern "$FILE" \
+                 --dir release-assets 2>/dev/null; then
+              HASH=$(sha256sum "release-assets/$FILE" | awk '{print $1}')
+              jq --arg file "$FILE" --arg hash "$HASH" \
+                 '.[$file] = $hash' found_hashes.json > tmp.json && mv tmp.json found_hashes.json
+            else
+              echo "Warning: asset $FILE not found in release $TAG"
+            fi
+          done
+
+          
+          jq --slurpfile hashes found_hashes.json \
+              --argjson mapping "$(cat << 'EOF'
+          {
+            "linux-x86_64":   "NAMETOKEN-linux-x86_64.so",
+            "linux-aarch64":  "NAMETOKEN-linux-arm64.so",
+            "macos-arm64":    "NAMETOKEN-macos-arm64.dylib",
+            "macos-x86_64":   "NAMETOKEN-macos-intel.dylib",
+            "windows":        "NAMETOKEN-windows-x86_64.dll",
+            "windows-arm64":  "NAMETOKEN-windows-arm64.dll",
+            "termux-aarch64": "NAMETOKEN-termux-arm64.so",
+            "termux-armv7":   "NAMETOKEN-termux-armv7.so"
+          }
+          EOF
+          )" \
+              --arg name "$NAME" \
+              'reduce (.platforms | keys[]) as $key (.;
+                ($mapping[$key] | gsub("NAMETOKEN"; $name)) as $file |
+                if $hashes[0][$file] then
+                  .platforms[$key].checksum = "sha256:" + $hashes[0][$file]
+                else . end
+              )' trait-repo/pr_manifest.json > trait-repo/manifest.json
+
+      - name: Upload manifest to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.inputs.tag_name }}" \
+            trait-repo/manifest.json --clobber \
+            --repo "${{ github.repository }}"

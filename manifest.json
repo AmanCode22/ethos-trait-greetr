@@ -1,0 +1,10 @@
+{
+  "description":"A short description of your trait here",
+  "name": "<YOUR_TRAIT_NAME>",
+  "functions": {
+    "<FUNCTION_NAME>": {
+      "return": "<RETURN_TYPE>",
+      "args": ["<ARGUMENT_TYPE1>", "<ARGUMENT_TYPE2>"]
+    }
+  }
+}

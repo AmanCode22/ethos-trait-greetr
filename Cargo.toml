@@ -1,0 +1,9 @@
+[package]
+name = "<YOUR PACKAGE NAME HERE>"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+name = "<YOUR TRAIT NAME HERE>"
+path = "src/trait.rs"
+crate-type = ["cdylib"]
