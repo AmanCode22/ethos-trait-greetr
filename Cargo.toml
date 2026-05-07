@@ -1,9 +1,9 @@
 [package]
-name = "<YOUR PACKAGE NAME HERE>"
+name = "greetr"
 version = "1.0.0"
 edition = "2024"
 
 [lib]
-name = "<YOUR TRAIT NAME HERE>"
+name = "greetr"
 path = "src/trait.rs"
 crate-type = ["cdylib"]
