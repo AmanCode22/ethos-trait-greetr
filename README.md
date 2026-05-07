@@ -37,13 +37,16 @@ Every function you want to use in Ethos must be exported in `src/trait.rs`.
 
 Example:
 ```rust
+use core::ffi::c_int;
+
 #[no_mangle]
-pub extern "C" fn add(a: i32, b: i32) -> i32 {
+pub extern "C" fn add(a: c_int, b: c_int) -> c_int {
     a + b
 }
+
 ```
 
-Then list it in `manifest.json` under `functions`. The CI workflow reads this and generates the Foundry manifest. For more see Ethos docs on editing manifest. Every function must be wrapped in pub extern "C"  and no magle, to prevent function mangling to be compatible with ctypes.
+Then list it in `manifest.json` under `functions`. The CI workflow reads this and generates the Foundry manifest. For more see Ethos docs on editing manifest. Every function must be wrapped in pub extern "C"  and no magle, to prevent function mangling to be compatible with ctypes. Also see docs for data type mapping also. Use of core::ffi is necessary for ctypes compatible binary
 
 
 
